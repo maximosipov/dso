@@ -69,8 +69,8 @@ float setting_minIdepthH_marg = 50;
 
 
 
-float setting_desiredImmatureDensity = 1500; // immature points per frame
-float setting_desiredPointDensity = 2000; // aimed total points in the active window.
+float setting_desiredImmatureDensity = 3000; // original is 1500 immature points per frame
+float setting_desiredPointDensity = 4000; // original is 2000 aimed total points in the active window.
 float setting_minPointsRemaining = 0.05;  // marg a frame if less than X% points remain.
 float setting_maxLogAffFacInWindow = 0.7; // marg a frame if factor between intensities to current frame is larger than 1/X or X.
 
@@ -189,7 +189,7 @@ bool disableReconfigure=false;
 bool debugSaveImages = false;
 bool multiThreading = true;
 bool disableAllDisplay = false;
-bool setting_onlyLogKFPoses = true;
+bool setting_onlyLogKFPoses = false;
 bool setting_logStuff = true;
 
 
@@ -207,7 +207,7 @@ bool setting_render_displayDepth = true;
 
 bool setting_fullResetRequested = false;
 
-bool setting_debugout_runquiet = false;
+bool setting_debugout_runquiet = true; //original is false
 
 int sparsityFactor = 5;	// not actually a setting, only some legacy stuff for coarse initializer.
 

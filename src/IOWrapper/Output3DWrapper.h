@@ -171,6 +171,7 @@ public:
          * Always called, no overhead if not used.
          */
         virtual void pushLiveFrame(FrameHessian* image) {}
+        virtual void pushStereoLiveFrame(FrameHessian* image, FrameHessian* image_right){}
 
 
 

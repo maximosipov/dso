@@ -73,6 +73,7 @@ public:
 
 
     virtual void pushLiveFrame(FrameHessian* image) override;
+    virtual void pushStereoLiveFrame(FrameHessian* image, FrameHessian* image_right) override;
     virtual void pushDepthImage(MinimalImageB3* image) override;
     virtual bool needPushDepthImage() override;
 
@@ -96,6 +97,7 @@ private:
 	MinimalImageB3* internalVideoImg;
 	MinimalImageB3* internalKFImg;
 	MinimalImageB3* internalResImg;
+	MinimalImageB3* internalVideoImg_Right;
 	bool videoImgChanged, kfImgChanged, resImgChanged;
 
 

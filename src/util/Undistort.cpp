@@ -385,11 +385,11 @@ void Undistort::loadPhotometricCalibration(std::string file, std::string noiseIm
 template<typename T>
 ImageAndExposure* Undistort::undistort(const MinimalImage<T>* image_raw, float exposure, double timestamp, float factor) const
 {
-	if(image_raw->w != wOrg || image_raw->h != hOrg)
-	{
-		printf("Undistort::undistort: wrong image size (%d %d instead of %d %d) \n", image_raw->w, image_raw->h, w, h);
-		exit(1);
-	}
+//	if(image_raw->w != wOrg || image_raw->h != hOrg)
+//	{
+//		printf("Undistort::undistort: wrong image size (%d %d instead of %d %d) \n", image_raw->w, image_raw->h, w, h);
+//		exit(1);
+//	}
 
 	photometricUndist->processFrame<T>(image_raw->data, exposure, factor);
 	ImageAndExposure* result = new ImageAndExposure(w, h, timestamp);
@@ -729,12 +729,13 @@ void Undistort::readFromFile(const char* configFileName, int nPars, std::string 
 	std::ifstream infile(configFileName);
 	assert(infile.good());
 
-    std::string l1,l2,l3,l4;
+    std::string l1,l2,l3,l4,l5;
 
 	std::getline(infile,l1);
 	std::getline(infile,l2);
     std::getline(infile,l3);
     std::getline(infile,l4);
+    std::getline(infile,l5);
 
     // l1 & l2
     if(nPars == 5) // fov model
@@ -859,6 +860,16 @@ void Undistort::readFromFile(const char* configFileName, int nPars, std::string 
 	{
 		printf("Out: Failed to Read Output resolution... not rectifying.\n");
 		valid = false;
+    }
+
+    //　l5
+    if(std::sscanf(l5.c_str(), "%f", &bl) == 1)
+    {
+        printf("Baseline: %f \n", bl);
+    }
+    else
+    {
+        printf("Out: Failed to Read Baseline... can not do stereo. \n");
     }
 
     remapX = new float[w*h];

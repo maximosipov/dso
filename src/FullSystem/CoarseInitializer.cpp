@@ -35,6 +35,7 @@
 #include "FullSystem/Residuals.h"
 #include "FullSystem/PixelSelector.h"
 #include "FullSystem/PixelSelector2.h"
+#include "FullSystem/ImmaturePoint.h"
 #include "util/nanoflann.h"
 
 
@@ -49,8 +50,11 @@ CoarseInitializer::CoarseInitializer(int ww, int hh) : thisToNext_aff(0,0), this
 {
 	for(int lvl=0; lvl<pyrLevelsUsed; lvl++)
 	{
+		int wl = ww>>lvl;
+		int hl = hh>>lvl;
 		points[lvl] = 0;
 		numPoints[lvl] = 0;
+		idepth[lvl] = new float[wl*hl];
 	}
 
 	JbBuffer = new Vec10f[ww*hh];
@@ -71,6 +75,7 @@ CoarseInitializer::~CoarseInitializer()
 	for(int lvl=0; lvl<pyrLevelsUsed; lvl++)
 	{
 		if(points[lvl] != 0) delete[] points[lvl];
+		delete[] idepth[lvl];
 	}
 
 	delete[] JbBuffer;
@@ -78,12 +83,13 @@ CoarseInitializer::~CoarseInitializer()
 }
 
 
-bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IOWrap::Output3DWrapper*> &wraps)
+bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, FrameHessian* newFrameHessian_Right, std::vector<IOWrap::Output3DWrapper*> &wraps)
 {
 	newFrame = newFrameHessian;
 
-    for(IOWrap::Output3DWrapper* ow : wraps)
-        ow->pushLiveFrame(newFrameHessian);
+	for(IOWrap::Output3DWrapper* ow : wraps) {
+		ow->pushStereoLiveFrame(newFrameHessian, newFrameHessian_Right);
+	}
 
 	int maxIterations[] = {5,5,10,30,50};
 
@@ -272,7 +278,7 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 
 
 
-	return snapped && frameID > snappedAt+5;
+	return snapped && frameID > snappedAt+1;
 }
 
 void CoarseInitializer::debugPlot(int lvl, std::vector<IOWrap::Output3DWrapper*> &wraps)
@@ -764,6 +770,165 @@ void CoarseInitializer::makeGradients(Eigen::Vector3f** data)
 		}
 	}
 }
+void CoarseInitializer::setFirstStereo(CalibHessian* HCalib, FrameHessian* newFrameHessian, FrameHessian* newFrameHessian_Right)
+{
+
+	makeK(HCalib);
+	firstFrame = newFrameHessian;
+	firstRightFrame = newFrameHessian_Right;
+
+	PixelSelector sel(w[0],h[0]);
+
+	float* statusMap = new float[w[0]*h[0]];
+	bool* statusMapB = new bool[w[0]*h[0]];
+
+	Mat33f K = Mat33f::Identity();
+	K(0,0) = HCalib->fxl();
+	K(1,1) = HCalib->fyl();
+	K(0,2) = HCalib->cxl();
+	K(1,2) = HCalib->cyl();
+
+	float densities[] = {0.03,0.05,0.15,0.5,1};
+	memset(idepth[0], 0, sizeof(float)*w[0]*h[0]);
+
+	for(int lvl=0; lvl<pyrLevelsUsed; lvl++)
+	{
+		sel.currentPotential = 3;
+		int npts, npts_right;
+		if(lvl == 0) {
+			npts = sel.makeMaps(firstFrame, statusMap, densities[lvl]*w[0]*h[0], 1, false, 2);
+		} else {
+			npts = makePixelStatus(firstFrame->dIp[lvl], statusMapB, w[lvl], h[lvl], densities[lvl]*w[0]*h[0]);
+		}
+
+		if(points[lvl] != 0) delete[] points[lvl];
+		points[lvl] = new Pnt[npts];
+
+		// set idepth map by static stereo matching. if no idepth is available, set 0.01.
+		int wl = w[lvl], hl = h[lvl];
+		Pnt* pl = points[lvl];
+		int nl = 0;
+		for(int y=patternPadding+1; y<hl-patternPadding-2; y++) {
+			for(int x=patternPadding+1; x<wl-patternPadding-2; x++) {
+				if(lvl==0 && statusMap[x+y*wl] != 0) {
+					ImmaturePoint* pt = new ImmaturePoint(x, y, firstFrame, statusMap[x+y*wl], HCalib);
+
+					pt->u_stereo = pt->u;
+					pt->v_stereo = pt->v;
+					pt->idepth_min_stereo = 0;
+					pt->idepth_max_stereo = NAN;
+					ImmaturePointStatus stat = pt->traceStereo(firstRightFrame, K, 1);
+
+					if(stat==ImmaturePointStatus::IPS_GOOD) {
+						pl[nl].u = x;
+						pl[nl].v = y;
+
+						pl[nl].idepth = pt->idepth_stereo;
+						pl[nl].iR = pt->idepth_stereo;
+
+						pl[nl].isGood=true;
+						pl[nl].energy.setZero();
+						pl[nl].lastHessian=0;
+						pl[nl].lastHessian_new=0;
+						pl[nl].my_type= (lvl!=0) ? 1 : statusMap[x+y*wl];
+						idepth[0][x+wl*y] = pt->idepth_stereo;
+
+						Eigen::Vector3f* cpt = firstFrame->dIp[lvl] + x + y*w[lvl];
+						float sumGrad2=0;
+						for(int idx=0; idx<patternNum; idx++) {
+							int dx = patternP[idx][0];
+							int dy = patternP[idx][1];
+							float absgrad = cpt[dx + dy*w[lvl]].tail<2>().squaredNorm();
+							sumGrad2 += absgrad;
+						}
+
+						pl[nl].outlierTH = patternNum*setting_outlierTH;
+						nl++;
+						assert(nl <= npts);
+					} else {
+						pl[nl].u = x;
+						pl[nl].v = y;
+						pl[nl].idepth = 0.01;
+						pl[nl].iR = 0.01;
+						pl[nl].isGood=true;
+						pl[nl].energy.setZero();
+						pl[nl].lastHessian=0;
+						pl[nl].lastHessian_new=0;
+						pl[nl].my_type= (lvl!=0) ? 1 : statusMap[x+y*wl];
+						idepth[0][x+wl*y] = 0.01;
+
+						Eigen::Vector3f* cpt = firstFrame->dIp[lvl] + x + y*w[lvl];
+						float sumGrad2=0;
+						for(int idx=0; idx<patternNum; idx++) {
+							int dx = patternP[idx][0];
+							int dy = patternP[idx][1];
+							float absgrad = cpt[dx + dy*w[lvl]].tail<2>().squaredNorm();
+							sumGrad2 += absgrad;
+						}
+
+						pl[nl].outlierTH = patternNum*setting_outlierTH;
+
+						nl++;
+						assert(nl <= npts);
+					}
+
+					delete pt;
+				}
+
+				if(lvl!=0 && statusMapB[x+y*wl]) {
+					int lvlm1 = lvl-1;
+					int wlm1 = w[lvlm1];
+					float* idepth_l = idepth[lvl];
+					float* idepth_lm = idepth[lvlm1];
+					pl[nl].u = x+0.1;
+					pl[nl].v = y+0.1;
+					pl[nl].idepth = 1;
+					pl[nl].iR = 1;
+					pl[nl].isGood=true;
+					pl[nl].energy.setZero();
+					pl[nl].lastHessian=0;
+					pl[nl].lastHessian_new=0;
+					pl[nl].my_type= (lvl!=0) ? 1 : statusMap[x+y*wl];
+					int bidx = 2*x   + 2*y*wlm1;
+					idepth_l[x + y*wl] = idepth_lm[bidx] +
+						idepth_lm[bidx+1] +
+						idepth_lm[bidx+wlm1] +
+						idepth_lm[bidx+wlm1+1];
+
+					Eigen::Vector3f* cpt = firstFrame->dIp[lvl] + x + y*w[lvl];
+					float sumGrad2=0;
+					for(int idx=0; idx<patternNum; idx++) {
+						int dx = patternP[idx][0];
+						int dy = patternP[idx][1];
+						float absgrad = cpt[dx + dy*w[lvl]].tail<2>().squaredNorm();
+						sumGrad2 += absgrad;
+					}
+
+					pl[nl].outlierTH = patternNum*setting_outlierTH;
+
+					nl++;
+					assert(nl <= npts);
+				}
+			}
+		}
+
+		numPoints[lvl]=nl;
+	}
+
+	delete[] statusMap;
+	delete[] statusMapB;
+
+	makeNN();
+
+	thisToNext=SE3();
+	snapped = false;
+	frameID = snappedAt = 0;
+
+	for(int i=0; i<pyrLevelsUsed; i++) {
+		dGrads[i].setZero();
+	}
+}
+
 void CoarseInitializer::setFirst(	CalibHessian* HCalib, FrameHessian* newFrameHessian)
 {
 
@@ -798,7 +963,8 @@ void CoarseInitializer::setFirst(	CalibHessian* HCalib, FrameHessian* newFrameHe
 		for(int x=patternPadding+1;x<wl-patternPadding-2;x++)
 		{
 			//if(x==2) printf("y=%d!\n",y);
-			if((lvl!=0 && statusMapB[x+y*wl]) || (lvl==0 && statusMap[x+y*wl] != 0))
+			//if((lvl!=0 && statusMapB[x+y*wl]) || (lvl==0 && statusMap[x+y*wl] != 0))
+			if(lvl!=0 && statusMapB[x+y*wl])
 			{
 				//assert(patternNum==9);
 				pl[nl].u = x+0.1;

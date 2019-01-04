@@ -28,9 +28,14 @@
 
 #include "util/settings.h"
 #include "util/globalCalib.h"
+#include "util/DatasetReader.h"
 #include "FullSystem/HessianBlocks.h"
 #include "FullSystem/FullSystem.h"
 #include "FullSystem/ImmaturePoint.h"
+
+#include <iostream>
+#include <fstream>
+#include <string>
 
 namespace dso
 {
@@ -51,9 +56,11 @@ PangolinDSOViewer::PangolinDSOViewer(int w, int h, bool startRunThread)
 		internalVideoImg = new MinimalImageB3(w,h);
 		internalKFImg = new MinimalImageB3(w,h);
 		internalResImg = new MinimalImageB3(w,h);
+		internalVideoImg_Right = new MinimalImageB3(w,h);
 		videoImgChanged=kfImgChanged=resImgChanged=true;
 
 		internalVideoImg->setBlack();
+		internalVideoImg_Right->setBlack();
 		internalKFImg->setBlack();
 		internalResImg->setBlack();
 	}
@@ -99,8 +106,11 @@ void PangolinDSOViewer::run()
 		.SetHandler(new pangolin::Handler3D(Visualization3D_camera));
 
 
-	// 3 images
+	// 4 images
 	pangolin::View& d_kfDepth = pangolin::Display("imgKFDepth")
+	    .SetAspect(w/(float)h);
+
+	pangolin::View& d_video_Right = pangolin::Display("imgKFDepth_Right")
 	    .SetAspect(w/(float)h);
 
 	pangolin::View& d_video = pangolin::Display("imgVideo")
@@ -111,6 +121,7 @@ void PangolinDSOViewer::run()
 
 	pangolin::GlTexture texKFDepth(w,h,GL_RGB,false,0,GL_RGB,GL_UNSIGNED_BYTE);
 	pangolin::GlTexture texVideo(w,h,GL_RGB,false,0,GL_RGB,GL_UNSIGNED_BYTE);
+	pangolin::GlTexture texVideo_Right(w,h,GL_RGB,false,0,GL_RGB,GL_UNSIGNED_BYTE);
 	pangolin::GlTexture texResidual(w,h,GL_RGB,false,0,GL_RGB,GL_UNSIGNED_BYTE);
 
 
@@ -119,6 +130,7 @@ void PangolinDSOViewer::run()
 		  .SetLayout(pangolin::LayoutEqual)
 		  .AddDisplay(d_kfDepth)
 		  .AddDisplay(d_video)
+		  .AddDisplay(d_video_Right)
 		  .AddDisplay(d_residual);
 
 	// parameter reconfigure gui
@@ -137,7 +149,7 @@ void PangolinDSOViewer::run()
 	pangolin::Var<bool> settings_show3D("ui.show3D",true,true);
 	pangolin::Var<bool> settings_showLiveDepth("ui.showDepth",true,true);
 	pangolin::Var<bool> settings_showLiveVideo("ui.showVideo",true,true);
-    pangolin::Var<bool> settings_showLiveResidual("ui.showResidual",false,true);
+    pangolin::Var<bool> settings_showLiveResidual("ui.showResidual",true,true);
 
 	pangolin::Var<bool> settings_showFramesWindow("ui.showFramesWindow",false,true);
 	pangolin::Var<bool> settings_showFullTracking("ui.showFullTracking",false,true);
@@ -162,8 +174,37 @@ void PangolinDSOViewer::run()
 	pangolin::Var<double> settings_trackFps("ui.Track fps",0,0,0,false);
 	pangolin::Var<double> settings_mapFps("ui.KF fps",0,0,0,false);
 
+    // show ground truth
+    std::string gtPath = "/home/jiatianwu/dso/05/05.txt";
+    std::ifstream ReadFile(gtPath.c_str());
+    std::string temp;
+    std::string delim (" ");
+    std::vector<std::string> results;
+    Sophus::Matrix4f gtCam;
+    std::vector<Sophus::Matrix4f> matrix_result;
 
-	// Default hooks for exiting (Esc) and fullscreen (tab).
+    while(std::getline(ReadFile, temp))
+    {
+        split(temp, delim, results);
+        for(int i = 0; i < 3; i++) {
+            for(int j = 0; j < 4; j++)
+            {
+                gtCam(i,j) = atof(results[4*i + j].c_str());
+            }
+		}
+        gtCam(3,0) = 0;
+        gtCam(3,1) = 0;
+        gtCam(3,2) = 0;
+        gtCam(3,3) = 1;
+
+        results.clear();
+        matrix_result.push_back(gtCam);
+    }
+    ReadFile.close();
+
+    float yellow[3] = {1,1,0};
+
+    // Default hooks for exiting (Esc) and fullscreen (tab).
 	while( !pangolin::ShouldQuit() && running )
 	{
 		// Clear entire screen
@@ -186,6 +227,15 @@ void PangolinDSOViewer::run()
 						this->settings_pointCloudMode, this->settings_minRelBS, this->settings_sparsity));
 				fh->drawPC(1);
 			}
+
+            for(int i = 0; i < matrix_result.size(); i++)
+            {
+
+                KeyFrameDisplay* fh = new KeyFrameDisplay;
+                fh->drawGTCam(matrix_result[i], 5, yellow, 0.1);
+                delete(fh);
+            }
+
 			if(this->settings_showCurrentCamera) currentCam->drawCam(2,0,0.2);
 			drawConstraints();
 			lk3d.unlock();
@@ -194,8 +244,13 @@ void PangolinDSOViewer::run()
 
 
 		openImagesMutex.lock();
-		if(videoImgChanged) 	texVideo.Upload(internalVideoImg->data,GL_BGR,GL_UNSIGNED_BYTE);
-		if(kfImgChanged) 		texKFDepth.Upload(internalKFImg->data,GL_BGR,GL_UNSIGNED_BYTE);
+		if(videoImgChanged) {
+			texVideo.Upload(internalVideoImg->data,GL_BGR,GL_UNSIGNED_BYTE);
+			texVideo_Right.Upload(internalVideoImg_Right->data,GL_BGR,GL_UNSIGNED_BYTE);
+		}
+		if(kfImgChanged) {
+			texKFDepth.Upload(internalKFImg->data,GL_BGR,GL_UNSIGNED_BYTE);  
+		}
 		if(resImgChanged) 		texResidual.Upload(internalResImg->data,GL_BGR,GL_UNSIGNED_BYTE);
 		videoImgChanged=kfImgChanged=resImgChanged=false;
 		openImagesMutex.unlock();
@@ -225,6 +280,10 @@ void PangolinDSOViewer::run()
 			d_video.Activate();
 			glColor4f(1.0f,1.0f,1.0f,1.0f);
 			texVideo.RenderToViewportFlipY();
+
+			d_video_Right.Activate();
+			glColor4f(1.0f,1.0f,1.0f,1.0f);
+			texVideo_Right.RenderToViewportFlipY();
 		}
 
 		if(setting_render_displayDepth)
@@ -267,8 +326,10 @@ void PangolinDSOViewer::run()
 	    this->settings_minRelBS = settings_minRelBS.Get();
 	    this->settings_sparsity = settings_sparsity.Get();
 
+		//====================TO DO : I set here.. not flexible===================
 	    setting_desiredPointDensity = settings_nPts.Get();
 	    setting_desiredImmatureDensity = settings_nCandidates.Get();
+
 	    setting_maxFrames = settings_nMaxFrames.Get();
 	    setting_kfGlobalWeight = settings_kfFrequency.Get();
 	    setting_minGradHistAdd = settings_gradHistAdd.Get();
@@ -325,6 +386,7 @@ void PangolinDSOViewer::reset_internal()
 
 	openImagesMutex.lock();
 	internalVideoImg->setBlack();
+	internalVideoImg_Right->setBlack();
 	internalKFImg->setBlack();
 	internalResImg->setBlack();
 	videoImgChanged= kfImgChanged= resImgChanged=true;
@@ -511,10 +573,37 @@ void PangolinDSOViewer::pushLiveFrame(FrameHessian* image)
 	boost::unique_lock<boost::mutex> lk(openImagesMutex);
 
 	for(int i=0;i<w*h;i++)
+	{
 		internalVideoImg->data[i][0] =
 		internalVideoImg->data[i][1] =
 		internalVideoImg->data[i][2] =
 			image->dI[i][0]*0.8 > 255.0f ? 255.0 : image->dI[i][0]*0.8;
+		internalVideoImg_Right->data[i][0] =
+		internalVideoImg_Right->data[i][1] =
+		internalVideoImg_Right->data[i][2] =
+			255.0f;
+	}
+
+	videoImgChanged=true;
+}
+
+void PangolinDSOViewer::pushStereoLiveFrame(FrameHessian* image,FrameHessian* image_right)
+{
+	if(!setting_render_displayVideo) return;
+    if(disableAllDisplay) return;
+
+	boost::unique_lock<boost::mutex> lk(openImagesMutex);
+
+	for(int i=0;i<w*h;i++){
+		internalVideoImg->data[i][0] =
+		internalVideoImg->data[i][1] =
+		internalVideoImg->data[i][2] =
+			image->dI[i][0]*0.8 > 255.0f ? 255.0 : image->dI[i][0]*0.8;
+		internalVideoImg_Right->data[i][0] =
+		internalVideoImg_Right->data[i][1] =
+		internalVideoImg_Right->data[i][2] =
+			image_right->dI[i][0]*0.8 > 255.0f ? 255.0 : image_right->dI[i][0]*0.8;
+	}
 
 	videoImgChanged=true;
 }
